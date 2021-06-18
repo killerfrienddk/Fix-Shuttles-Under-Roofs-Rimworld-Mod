@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Mods>
+  <mod packageId="brrainz.harmony" />
+  <mod packageId="Ludeon.RimWorld" />
+  <mod packageId="Ludeon.RimWorld.Royalty" />
+  <mod packageId="UnlimitedHugs.HugsLib" />
+  <mod packageId="killers.fixshuttleunderroof" />
+  <mod packageId="Declinedkilr.RadWorld_copy" />
+  <mod packageId="fluffy.modmanager" />
+  <mod packageId="smashphil.neceros.srtsexpanded" />
+</Mods>
