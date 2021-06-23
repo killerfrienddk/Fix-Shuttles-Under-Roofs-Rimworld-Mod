@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System;
 using RimWorld;
 using Verse;
@@ -159,9 +158,12 @@ namespace FixShuttlesUnderRoof {
             ___unusableBuildingsResult.Clear();
             if (___thingDefsToCheck == null) {
                 ___thingDefsToCheck = new List<ThingDef>();
-                foreach (ThingDef thingDef in DefDatabase<ThingDef>.AllDefsListForReading) {
-                    if (!thingDef.canBeUsedUnderRoof && !toggle) {
-                        ___thingDefsToCheck.Add(thingDef);
+                if (!toggle.Value) {
+                    foreach (ThingDef allDefsListForReading in DefDatabase<ThingDef>.AllDefsListForReading) {
+                        if (allDefsListForReading.canBeUsedUnderRoof) {
+                            continue;
+                        }
+                        ___thingDefsToCheck.Add(allDefsListForReading);
                     }
                 }
             }
@@ -169,10 +171,10 @@ namespace FixShuttlesUnderRoof {
             Faction ofPlayer = Faction.OfPlayer;
             for (int i = 0; i < ___thingDefsToCheck.Count; i++) {
                 for (int j = 0; j < maps.Count; j++) {
-                    List<Thing> list = maps[j].listerThings.ThingsOfDef(___thingDefsToCheck[i]);
-                    for (int k = 0; k < list.Count; k++) {
-                        if (list[k].Faction == ofPlayer && RoofUtility.IsAnyCellUnderRoof(list[k])) {
-                            ___unusableBuildingsResult.Add(list[k]);
+                    List<Thing> things = maps[j].listerThings.ThingsOfDef(___thingDefsToCheck[i]);
+                    for (int k = 0; k < things.Count; k++) {
+                        if (things[k].Faction == ofPlayer && RoofUtility.IsAnyCellUnderRoof(things[k])) {
+                            ___unusableBuildingsResult.Add(things[k]);
                         }
                     }
                 }
@@ -184,16 +186,51 @@ namespace FixShuttlesUnderRoof {
     }
     #endregion
 
+    #region CompScanner Fix
+    [HarmonyReversePatch]
+    [HarmonyPatch(typeof(CompScanner), "get_CanUseNow")]
+    static class CompScanner_CanUseNow_Patch {
+        static bool Prefix(ref bool __result, CompScanner __instance, CompPowerTrader ___powerComp, CompForbiddable ___forbiddable) {
+            var settings = HugsLibController.Instance.Settings.GetModSettings("RemoveNoRoofRequirementForShuttles");
+            SettingHandle<bool> toggle = settings.GetHandle<bool>("RemoveNoRoofRequirementForAllItemsToBeUsed");
+
+            if (!__instance.parent.Spawned) {
+                __result = false;
+                return false;
+            }
+            if (___powerComp != null && !___powerComp.PowerOn) {
+                __result = false;
+                return false;
+            }
+            if (toggle.Value) {
+                __result = toggle.Value;
+            } else {
+                if (RoofUtility.IsAnyCellUnderRoof(__instance.parent)) {
+                    __result = false;
+                    return false;
+                }
+            }
+            if (___forbiddable != null && ___forbiddable.Forbidden) {
+                __result = false;
+                return false;
+            }
+            __result = __instance.parent.Faction == Faction.OfPlayer;
+            return false;
+        }
+    }
+    #endregion
+
     #region Obital Trade Beacon Drop Fix
     /*[HarmonyReversePatch]*/
     [HarmonyPatch(typeof(TradeUtility), "SpawnDropPod")]
     static class TradeShip_GiveSoldThingToPlayer_Patch {
-        static void Prefix(ref IntVec3 dropSpot, Map map, Thing t) {
+        static bool Prefix(ref IntVec3 dropSpot, Map map, Thing t) {
             ActiveDropPodInfo activeDropPodInfo = new ActiveDropPodInfo() {
                 SingleContainedThing = t,
                 leaveSlag = false
             };
             MakeDropPodAt(dropSpot, map, activeDropPodInfo);
+            return false;
         }
 
         public static void MakeDropPodAt(IntVec3 c, Map map, ActiveDropPodInfo info) {
@@ -321,6 +358,47 @@ namespace FixShuttlesUnderRoof {
                 return true;
             }
             return DropCellFinder.IsGoodDropSpot(c + IntVec3.West, map, allowFogged, canRoofPunch, true);
+        }
+    }
+    #endregion
+
+    #region QuestNode_SpawnSkyfaller_RunInt_Patch
+    [HarmonyPatch(typeof(QuestNode_SpawnSkyfaller), "RunInt")]
+    static class QuestNode_SpawnSkyfaller_RunInt_Patch {
+        public static int QuestNode_SpawnSkyfallerCount = 1;
+        public static bool Prefix(ref QuestNode_SpawnSkyfaller __instance) {
+            Slate slate = QuestGen.slate;
+            Map map = QuestGen.slate.Get<Map>("map", null, false);
+            Skyfaller skyfaller = MakeSkyfaller(__instance.skyfallerDef.GetValue(slate), __instance.innerThings.GetValue(slate));
+            QuestPart_SpawnThing questPartSpawnThing = new QuestPart_SpawnThing() {
+                thing = skyfaller,
+                mapParent = map.Parent
+            };
+            if (__instance.factionOfForSafeSpot.GetValue(slate) != null) {
+                questPartSpawnThing.factionForFindingSpot = __instance.factionOfForSafeSpot.GetValue(slate).Faction;
+            }
+            if (__instance.cell.GetValue(slate).HasValue) {
+                questPartSpawnThing.cell = __instance.cell.GetValue(slate).Value;
+            }
+            questPartSpawnThing.inSignal = QuestGenUtility.HardcodedSignalWithQuestID(__instance.inSignal.GetValue(slate)) ?? QuestGen.slate.Get<string>("inSignal", null, false);
+            questPartSpawnThing.lookForSafeSpot = __instance.lookForSafeSpot.GetValue(slate);
+            questPartSpawnThing.tryLandInShipLandingZone = __instance.tryLandInShipLandingZone.GetValue(slate);
+
+            QuestGen.quest.AddPart(questPartSpawnThing);
+            return false;
+        }
+
+        public static Skyfaller MakeSkyfaller(ThingDef skyfaller, IEnumerable<Thing> things) {
+            var settings = HugsLibController.Instance.Settings.GetModSettings("RemoveNoRoofRequirementForShuttles");
+            SettingHandle<bool> toggle = settings.GetHandle<bool>("DropObitalTradeItemsOnRandomSpotFixForCaves");
+
+            Skyfaller skyfaller1 = SkyfallerMaker.MakeSkyfaller(skyfaller);
+            skyfaller1.def.skyfaller.hitRoof = !toggle.Value;
+            skyfaller1.def.skyfaller.explosionRadius = toggle.Value ? 0f : 3f;
+            if (things != null) {
+                skyfaller1.innerContainer.TryAddRangeOrTransfer(things, false, true);
+            }
+            return skyfaller1;
         }
     }
     #endregion
